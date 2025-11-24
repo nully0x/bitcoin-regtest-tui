@@ -17,6 +17,8 @@ pub struct BitcoinNodeInfo {
     pub difficulty: f64,
     /// Is initial block download complete.
     pub ibd_complete: bool,
+    /// Wallet balance in BTC.
+    pub balance: f64,
     /// RPC host:port.
     pub rpc_host: String,
     /// P2P host:port.

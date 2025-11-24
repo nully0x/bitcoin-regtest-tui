@@ -106,6 +106,10 @@ pub struct App {
     command_tx: mpsc::UnboundedSender<AppCommand>,
     /// Command receiver for async operations
     command_rx: mpsc::UnboundedReceiver<AppCommand>,
+    /// Log channel sender
+    log_tx: mpsc::UnboundedSender<String>,
+    /// Log channel receiver
+    log_rx: mpsc::UnboundedReceiver<String>,
     /// Network creation form state
     pub create_network_name: String,
     /// Number of LND nodes to create
@@ -169,8 +173,12 @@ impl Default for App {
 impl App {
     #[must_use]
     pub fn new() -> Self {
-        let network_manager = NetworkManager::new().expect("Failed to create network manager");
+        let mut network_manager = NetworkManager::new().expect("Failed to create network manager");
         let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (log_tx, log_rx) = mpsc::unbounded_channel();
+
+        // Set up logging for the network manager
+        network_manager.set_logger(log_tx.clone());
 
         Self {
             running: true,
@@ -186,6 +194,8 @@ impl App {
             status_message: None,
             command_tx,
             command_rx,
+            log_tx,
+            log_rx,
             create_network_name: String::new(),
             create_lnd_count: 2, // Default to 2 LND nodes
             create_node_alias: String::new(),
@@ -265,6 +275,11 @@ impl App {
         while self.running {
             terminal.draw(|frame| ui::render(frame, self))?;
             self.handle_events()?;
+
+            // Process any pending log messages
+            while let Ok(log_msg) = self.log_rx.try_recv() {
+                self.logs.push(log_msg);
+            }
 
             // Process any pending commands
             while let Ok(cmd) = self.command_rx.try_recv() {
@@ -1092,6 +1107,10 @@ impl App {
                         self.status_message = Some(format!("Failed to fund wallet: {}", e));
                     }
                 }
+                drop(manager);
+
+                // Refresh network state to update UI
+                self.refresh_networks().await?;
             }
         }
         Ok(())
@@ -1133,6 +1152,10 @@ impl App {
                         self.status_message = Some(format!("Failed to open channel: {}", e));
                     }
                 }
+                drop(manager);
+
+                // Refresh network state to update UI
+                self.refresh_networks().await?;
             }
         }
         Ok(())
@@ -1170,6 +1193,10 @@ impl App {
                         self.status_message = Some(format!("Failed to send payment: {}", e));
                     }
                 }
+                drop(manager);
+
+                // Refresh network state to update UI
+                self.refresh_networks().await?;
             }
         }
         Ok(())

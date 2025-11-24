@@ -149,14 +149,9 @@ impl BitcoinNode {
 
         // Get or create an address to mine to
         let mining_address = if let Some(addr) = address {
-            eprintln!(
-                "[DEBUG] BitcoinNode::mine_blocks: Using provided address: {}",
-                addr
-            );
             addr.to_string()
         } else {
             // Generate a new address
-            eprintln!("[DEBUG] BitcoinNode::mine_blocks: Generating new address");
             let output = manager
                 .exec_command(
                     container_id,
@@ -179,18 +174,10 @@ impl BitcoinNode {
                     }
                 })?;
             let addr = output.trim().to_string();
-            eprintln!(
-                "[DEBUG] BitcoinNode::mine_blocks: Generated address: {}",
-                addr
-            );
             addr
         };
 
         // Mine the blocks
-        eprintln!(
-            "[DEBUG] BitcoinNode::mine_blocks: Mining {} blocks to address {}",
-            blocks, mining_address
-        );
         let output = manager
             .exec_command(
                 container_id,
@@ -206,24 +193,14 @@ impl BitcoinNode {
             )
             .await?;
 
-        eprintln!("[DEBUG] BitcoinNode::mine_blocks: Raw output: {}", output);
-
         // Parse the block hashes from the output
         let block_hashes: Vec<String> = serde_json::from_str(&output).map_err(|e| {
-            eprintln!(
-                "[ERROR] BitcoinNode::mine_blocks: Failed to parse output as JSON: {}",
-                e
-            );
             polar_core::Error::Config(format!(
                 "Failed to parse block hashes: {}. Output was: {}",
                 e, output
             ))
         })?;
 
-        eprintln!(
-            "[DEBUG] BitcoinNode::mine_blocks: Successfully mined {} blocks",
-            block_hashes.len()
-        );
         Ok(block_hashes)
     }
 

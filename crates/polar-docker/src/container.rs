@@ -107,10 +107,9 @@ impl ContainerManager {
                 endpoint_config: Default::default(),
             };
 
-            if let Err(e) = self.docker.connect_network(net, connect_options).await {
+            if let Err(_e) = self.docker.connect_network(net, connect_options).await {
                 // Network might not exist or container might already be connected
-                // Log but don't fail
-                eprintln!("Warning: Failed to connect to network {}: {}", net, e);
+                // Silently ignore - this is not critical
             }
         }
 

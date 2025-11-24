@@ -477,6 +477,13 @@ fn render_bitcoin_info(info: &BitcoinNodeInfo) -> Vec<Line<'static>> {
                 },
             ),
         ]),
+        Line::from(vec![
+            Span::styled("Wallet Balance: ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!("{:.8} BTC", info.balance),
+                Style::default().fg(Color::Green),
+            ),
+        ]),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Network Endpoints",

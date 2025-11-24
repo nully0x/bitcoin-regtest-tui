@@ -8,6 +8,7 @@ use polar_docker::ContainerManager;
 use polar_nodes::{BitcoinNode, LndNode};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tokio::sync::mpsc;
 
 /// Manages network lifecycle and operations.
 pub struct NetworkManager {
@@ -17,6 +18,8 @@ pub struct NetworkManager {
     networks: HashMap<String, Network>,
     /// Configuration.
     config: Config,
+    /// Log channel sender (optional).
+    log_tx: Option<mpsc::UnboundedSender<String>>,
 }
 
 impl NetworkManager {
@@ -27,14 +30,28 @@ impl NetworkManager {
             container_manager: ContainerManager::new()?,
             networks: HashMap::new(),
             config,
+            log_tx: None,
         };
 
         // Load existing networks from disk
         if let Err(e) = manager.load_networks() {
+            // Can't log here yet since logger isn't set up
             eprintln!("Warning: Failed to load networks: {}", e);
         }
 
         Ok(manager)
+    }
+
+    /// Set the log channel sender.
+    pub fn set_logger(&mut self, log_tx: mpsc::UnboundedSender<String>) {
+        self.log_tx = Some(log_tx);
+    }
+
+    /// Log a message.
+    fn log(&self, message: impl Into<String>) {
+        if let Some(tx) = &self.log_tx {
+            let _ = tx.send(message.into());
+        }
     }
 
     /// Get the networks directory path.
@@ -91,7 +108,10 @@ impl NetworkManager {
                         self.networks.insert(network.name.clone(), network);
                     }
                     Err(e) => {
-                        eprintln!("Warning: Failed to load network from {:?}: {}", path, e);
+                        self.log(format!(
+                            "Warning: Failed to load network from {:?}: {}",
+                            path, e
+                        ));
                     }
                 }
             }
@@ -346,22 +366,23 @@ impl NetworkManager {
 
         network.status = NetworkStatus::Stopped;
 
+        // Clone network for persistence to avoid borrow issues
+        let network_clone = network.clone();
+
         // Remove the Docker network
-        let docker_network_name = format!("polar-{}", network.id);
+        let docker_network_name = format!("polar-{}", network_clone.id);
         if let Err(e) = self
             .container_manager
             .remove_network(&docker_network_name)
             .await
         {
             // Log but don't fail - network might not exist
-            eprintln!(
+            self.log(format!(
                 "Warning: Failed to remove network {}: {}",
                 docker_network_name, e
-            );
+            ));
         }
 
-        // Clone network for persistence to avoid borrow issues
-        let network_clone = network.clone();
         self.save_network(&network_clone)?;
 
         Ok(())
@@ -440,6 +461,21 @@ impl NetworkManager {
             )
             .await?;
 
+        // Execute bitcoin-cli getbalance
+        let balance_info = self
+            .container_manager
+            .exec_command(
+                container_id,
+                vec![
+                    "bitcoin-cli",
+                    "-regtest",
+                    "-rpcuser=polaruser",
+                    "-rpcpassword=polarpass",
+                    "getbalance",
+                ],
+            )
+            .await?;
+
         // Parse JSON responses
         let blockchain_json: serde_json::Value = serde_json::from_str(&blockchain_info)
             .map_err(|e| Error::Config(format!("Failed to parse blockchain info: {}", e)))?;
@@ -488,6 +524,9 @@ impl NetworkManager {
             })
             .unwrap_or_else(|| "18444".to_string());
 
+        // Parse balance
+        let balance: f64 = balance_info.trim().parse().unwrap_or(0.0);
+
         Ok(BitcoinNodeInfo {
             version: network_json["subversion"]
                 .as_str()
@@ -503,6 +542,7 @@ impl NetworkManager {
             ibd_complete: !blockchain_json["initialblockdownload"]
                 .as_bool()
                 .unwrap_or(true),
+            balance,
             rpc_host,
             p2p_host,
         })
@@ -878,10 +918,14 @@ impl NetworkManager {
 
         // Mine blocks to confirm the transaction if auto_mine is enabled
         if auto_mine {
-            eprintln!("[DEBUG] Auto-mining 6 blocks to confirm funding transaction");
+            self.log("Auto-mining 6 blocks to confirm funding transaction");
             btc_node_obj
                 .mine_blocks(&self.container_manager, 6, None)
                 .await?;
+
+            // Give LND a moment to detect the confirmed transaction
+            self.log("Waiting for LND to sync with confirmed blocks");
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         }
 
         Ok(txid)
