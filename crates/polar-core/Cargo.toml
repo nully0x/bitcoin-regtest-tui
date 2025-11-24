@@ -1,0 +1,17 @@
+[package]
+name = "polar-core"
+description = "Core types and configuration for Polar TUI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+directories = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

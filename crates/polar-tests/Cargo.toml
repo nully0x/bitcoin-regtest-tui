@@ -1,0 +1,17 @@
+[package]
+name = "polar-tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+polar-core.workspace = true
+polar-docker.workspace = true
+polar-nodes.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

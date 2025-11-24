@@ -1,0 +1,28 @@
+[package]
+name = "polar-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "CLI entry point for polar-tui Lightning Network development tool"
+
+[[bin]]
+name = "polar"
+path = "src/main.rs"
+
+[dependencies]
+polar-core.workspace = true
+polar-tui.workspace = true
+polar-docker.workspace = true
+polar-nodes.workspace = true
+
+tokio.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

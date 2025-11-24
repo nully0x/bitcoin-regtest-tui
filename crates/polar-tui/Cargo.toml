@@ -1,0 +1,25 @@
+[package]
+name = "polar-tui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Terminal user interface for polar Lightning Network development tool"
+
+[dependencies]
+polar-core.workspace = true
+polar-docker.workspace = true
+polar-nodes.workspace = true
+
+tokio.workspace = true
+ratatui.workspace = true
+crossterm = { workspace = true, features = ["event-stream"] }
+anyhow.workspace = true
+tracing.workspace = true
+futures.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

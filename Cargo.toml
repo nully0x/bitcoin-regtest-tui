@@ -1,0 +1,69 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/polar-cli",
+    "crates/polar-tui",
+    "crates/polar-core",
+    "crates/polar-docker",
+    "crates/polar-nodes",
+    "crates/polar-tests",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["polar-tui contributors"]
+license = "MIT"
+repository = "https://github.com/nully0x/polar-tui"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.41", features = ["full"] }
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Docker
+bollard = "0.18"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Async utilities
+futures = "0.3"
+futures-util = "0.3"
+tokio-stream = "0.1"
+async-trait = "0.1"
+
+# Utilities
+directories = "5.0"
+uuid = { version = "1.11", features = ["v4", "serde"] }
+
+# Internal crates
+polar-core = { path = "crates/polar-core" }
+polar-tui = { path = "crates/polar-tui" }
+polar-docker = { path = "crates/polar-docker" }
+polar-nodes = { path = "crates/polar-nodes" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
