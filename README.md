@@ -19,7 +19,7 @@ A terminal user interface for managing Lightning Network development environment
 ## Installation
 
 ```bash
-cargo install --path crates/polar-cli
+ I have not determined install create yet(name can change)
 ```
 
 ## Usage
@@ -38,7 +38,8 @@ The TUI provides a complete interface for managing your Lightning networks. All 
 |-----|--------|
 | `Tab` | Switch between panels |
 | `j/k` | Navigate down/up in lists |
-| `Enter` | Select network or view details |
+| `Enter` | Select network or view details | 
+| `a` | Add new node to selected network |
 | `n` | Create new network |
 | `s` | Start selected network |
 | `x` | Stop selected network |

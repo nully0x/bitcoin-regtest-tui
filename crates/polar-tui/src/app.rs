@@ -26,6 +26,27 @@ pub enum AppCommand {
         implementation: LightningImpl,
     },
     ViewNodeDetails,
+    MineBlocks {
+        num_blocks: u32,
+    },
+    FundWallet {
+        node_name: String,
+        amount: f64,
+    },
+    OpenChannel {
+        from_node: String,
+        to_node: String,
+        capacity: u64,
+        push_amount: Option<u64>,
+    },
+    SendPayment {
+        from_node: String,
+        to_node: String,
+        amount: u64,
+        memo: Option<String>,
+    },
+    SyncGraph,
+    SyncChain,
 }
 
 /// UI mode - what screen we're showing
@@ -38,6 +59,14 @@ pub enum UiMode {
     Main,
     /// Node details view
     NodeDetails,
+    /// Mine blocks dialog
+    MineBlocks,
+    /// Fund wallet dialog
+    FundWallet,
+    /// Open channel dialog
+    OpenChannel,
+    /// Send payment dialog
+    SendPayment,
 }
 
 /// Active panel in the main UI
@@ -93,6 +122,42 @@ pub struct App {
     pub node_info: Option<NodeInfo>,
     /// Node info scroll position
     pub node_info_scroll: usize,
+
+    // Mine blocks form state
+    /// Number of blocks to mine
+    pub mine_blocks_count: String,
+
+    // Fund wallet form state
+    /// Selected node index for funding
+    pub fund_node_idx: usize,
+    /// Amount to fund (BTC)
+    pub fund_amount: String,
+    /// Active field in fund form (0=node, 1=amount)
+    pub fund_form_field: usize,
+
+    // Open channel form state
+    /// From node index
+    pub channel_from_idx: usize,
+    /// To node index
+    pub channel_to_idx: usize,
+    /// Channel capacity (sats)
+    pub channel_capacity: String,
+    /// Push amount (sats)
+    pub channel_push_amount: String,
+    /// Active field in channel form (0=from, 1=to, 2=capacity, 3=push)
+    pub channel_form_field: usize,
+
+    // Send payment form state
+    /// From node index
+    pub payment_from_idx: usize,
+    /// To node index
+    pub payment_to_idx: usize,
+    /// Payment amount (sats)
+    pub payment_amount: String,
+    /// Payment memo
+    pub payment_memo: String,
+    /// Active field in payment form (0=from, 1=to, 2=amount, 3=memo)
+    pub payment_form_field: usize,
 }
 
 impl Default for App {
@@ -129,6 +194,21 @@ impl App {
             create_form_field: 0,
             node_info: None,
             node_info_scroll: 0,
+            // Lightning operation form defaults
+            mine_blocks_count: "100".to_string(),
+            fund_node_idx: 0,
+            fund_amount: "1.0".to_string(),
+            fund_form_field: 0,
+            channel_from_idx: 0,
+            channel_to_idx: 1,
+            channel_capacity: "1000000".to_string(),
+            channel_push_amount: "500000".to_string(),
+            channel_form_field: 0,
+            payment_from_idx: 0,
+            payment_to_idx: 1,
+            payment_amount: "10000".to_string(),
+            payment_memo: String::new(),
+            payment_form_field: 0,
         }
     }
 
@@ -220,6 +300,36 @@ impl App {
                     AppCommand::ViewNodeDetails => {
                         self.view_node_details().await?;
                     }
+                    AppCommand::MineBlocks { num_blocks } => {
+                        self.mine_blocks(num_blocks).await?;
+                    }
+                    AppCommand::FundWallet { node_name, amount } => {
+                        self.fund_wallet(&node_name, amount).await?;
+                    }
+                    AppCommand::OpenChannel {
+                        from_node,
+                        to_node,
+                        capacity,
+                        push_amount,
+                    } => {
+                        self.open_channel(&from_node, &to_node, capacity, push_amount)
+                            .await?;
+                    }
+                    AppCommand::SendPayment {
+                        from_node,
+                        to_node,
+                        amount,
+                        memo,
+                    } => {
+                        self.send_payment(&from_node, &to_node, amount, memo.as_deref())
+                            .await?;
+                    }
+                    AppCommand::SyncGraph => {
+                        self.sync_graph().await?;
+                    }
+                    AppCommand::SyncChain => {
+                        self.sync_chain().await?;
+                    }
                 }
                 // Redraw after processing command
                 terminal.draw(|frame| ui::render(frame, self))?;
@@ -244,6 +354,10 @@ impl App {
             UiMode::CreateNetwork => self.handle_create_network_key(code),
             UiMode::Main => self.handle_main_key(code),
             UiMode::NodeDetails => self.handle_node_details_key(code),
+            UiMode::MineBlocks => self.handle_mine_blocks_key(code),
+            UiMode::FundWallet => self.handle_fund_wallet_key(code),
+            UiMode::OpenChannel => self.handle_open_channel_key(code),
+            UiMode::SendPayment => self.handle_send_payment_key(code),
         }
     }
 
@@ -407,6 +521,56 @@ impl App {
                     }
                 }
             }
+            KeyCode::Char('m') => {
+                // Mine blocks - only available when network is selected
+                if self.selected_network.is_some() {
+                    self.ui_mode = UiMode::MineBlocks;
+                    self.mine_blocks_count = "100".to_string();
+                }
+            }
+            KeyCode::Char('f') => {
+                // Fund wallet - only available when nodes exist
+                if self.selected_network.is_some() && !self.nodes.is_empty() {
+                    self.ui_mode = UiMode::FundWallet;
+                    self.fund_node_idx = 0;
+                    self.fund_amount = "1.0".to_string();
+                    self.fund_form_field = 0;
+                }
+            }
+            KeyCode::Char('c') => {
+                // Open channel - need at least 2 LND nodes
+                if self.selected_network.is_some() && self.nodes.len() >= 2 {
+                    self.ui_mode = UiMode::OpenChannel;
+                    self.channel_from_idx = 0;
+                    self.channel_to_idx = 1;
+                    self.channel_capacity = "1000000".to_string();
+                    self.channel_push_amount = "500000".to_string();
+                    self.channel_form_field = 0;
+                }
+            }
+            KeyCode::Char('p') => {
+                // Send payment - need at least 2 LND nodes
+                if self.selected_network.is_some() && self.nodes.len() >= 2 {
+                    self.ui_mode = UiMode::SendPayment;
+                    self.payment_from_idx = 0;
+                    self.payment_to_idx = 1;
+                    self.payment_amount = "10000".to_string();
+                    self.payment_memo.clear();
+                    self.payment_form_field = 0;
+                }
+            }
+            KeyCode::Char('g') => {
+                // Sync graph - synchronize LND nodes with each other
+                if self.selected_network.is_some() {
+                    let _ = self.command_tx.send(AppCommand::SyncGraph);
+                }
+            }
+            KeyCode::Char('y') => {
+                // Sync chain - ensure LND nodes are synced with Bitcoin blockchain
+                if self.selected_network.is_some() {
+                    let _ = self.command_tx.send(AppCommand::SyncChain);
+                }
+            }
             _ => {}
         }
     }
@@ -424,6 +588,205 @@ impl App {
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.node_info_scroll = self.node_info_scroll.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_mine_blocks_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.ui_mode = UiMode::Main;
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                self.mine_blocks_count.push(c);
+            }
+            KeyCode::Backspace => {
+                self.mine_blocks_count.pop();
+            }
+            KeyCode::Enter => {
+                if let Ok(num_blocks) = self.mine_blocks_count.parse::<u32>() {
+                    let _ = self.command_tx.send(AppCommand::MineBlocks { num_blocks });
+                    self.ui_mode = UiMode::Main;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_fund_wallet_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.ui_mode = UiMode::Main;
+            }
+            KeyCode::Tab | KeyCode::Down => {
+                self.fund_form_field = (self.fund_form_field + 1) % 2;
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                self.fund_form_field = if self.fund_form_field == 0 { 1 } else { 0 };
+            }
+            KeyCode::Left => {
+                if self.fund_form_field == 0 && self.fund_node_idx > 0 {
+                    self.fund_node_idx -= 1;
+                }
+            }
+            KeyCode::Right => {
+                if self.fund_form_field == 0
+                    && self.fund_node_idx < self.nodes.len().saturating_sub(1)
+                {
+                    self.fund_node_idx += 1;
+                }
+            }
+            KeyCode::Char(c) if self.fund_form_field == 1 && (c.is_ascii_digit() || c == '.') => {
+                self.fund_amount.push(c);
+            }
+            KeyCode::Backspace if self.fund_form_field == 1 => {
+                self.fund_amount.pop();
+            }
+            KeyCode::Enter => {
+                if let Ok(amount) = self.fund_amount.parse::<f64>() {
+                    if let Some(node_name) = self.nodes.get(self.fund_node_idx).cloned() {
+                        let _ = self
+                            .command_tx
+                            .send(AppCommand::FundWallet { node_name, amount });
+                        self.ui_mode = UiMode::Main;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_open_channel_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.ui_mode = UiMode::Main;
+            }
+            KeyCode::Tab | KeyCode::Down => {
+                self.channel_form_field = (self.channel_form_field + 1) % 4;
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                self.channel_form_field = if self.channel_form_field == 0 {
+                    3
+                } else {
+                    self.channel_form_field - 1
+                };
+            }
+            KeyCode::Left => match self.channel_form_field {
+                0 if self.channel_from_idx > 0 => self.channel_from_idx -= 1,
+                1 if self.channel_to_idx > 0 => self.channel_to_idx -= 1,
+                _ => {}
+            },
+            KeyCode::Right => match self.channel_form_field {
+                0 if self.channel_from_idx < self.nodes.len().saturating_sub(1) => {
+                    self.channel_from_idx += 1
+                }
+                1 if self.channel_to_idx < self.nodes.len().saturating_sub(1) => {
+                    self.channel_to_idx += 1
+                }
+                _ => {}
+            },
+            KeyCode::Char(c) if c.is_ascii_digit() => match self.channel_form_field {
+                2 => self.channel_capacity.push(c),
+                3 => self.channel_push_amount.push(c),
+                _ => {}
+            },
+            KeyCode::Backspace => match self.channel_form_field {
+                2 => {
+                    self.channel_capacity.pop();
+                }
+                3 => {
+                    self.channel_push_amount.pop();
+                }
+                _ => {}
+            },
+            KeyCode::Enter => {
+                if let (Ok(capacity), Ok(push)) = (
+                    self.channel_capacity.parse::<u64>(),
+                    self.channel_push_amount.parse::<u64>(),
+                ) {
+                    if let (Some(from), Some(to)) = (
+                        self.nodes.get(self.channel_from_idx).cloned(),
+                        self.nodes.get(self.channel_to_idx).cloned(),
+                    ) {
+                        let push_amount = if push > 0 { Some(push) } else { None };
+                        let _ = self.command_tx.send(AppCommand::OpenChannel {
+                            from_node: from,
+                            to_node: to,
+                            capacity,
+                            push_amount,
+                        });
+                        self.ui_mode = UiMode::Main;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_send_payment_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.ui_mode = UiMode::Main;
+            }
+            KeyCode::Tab | KeyCode::Down => {
+                self.payment_form_field = (self.payment_form_field + 1) % 4;
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                self.payment_form_field = if self.payment_form_field == 0 {
+                    3
+                } else {
+                    self.payment_form_field - 1
+                };
+            }
+            KeyCode::Left => match self.payment_form_field {
+                0 if self.payment_from_idx > 0 => self.payment_from_idx -= 1,
+                1 if self.payment_to_idx > 0 => self.payment_to_idx -= 1,
+                _ => {}
+            },
+            KeyCode::Right => match self.payment_form_field {
+                0 if self.payment_from_idx < self.nodes.len().saturating_sub(1) => {
+                    self.payment_from_idx += 1
+                }
+                1 if self.payment_to_idx < self.nodes.len().saturating_sub(1) => {
+                    self.payment_to_idx += 1
+                }
+                _ => {}
+            },
+            KeyCode::Char(c) => match self.payment_form_field {
+                2 if c.is_ascii_digit() => self.payment_amount.push(c),
+                3 => self.payment_memo.push(c),
+                _ => {}
+            },
+            KeyCode::Backspace => match self.payment_form_field {
+                2 => {
+                    self.payment_amount.pop();
+                }
+                3 => {
+                    self.payment_memo.pop();
+                }
+                _ => {}
+            },
+            KeyCode::Enter => {
+                if let Ok(amount) = self.payment_amount.parse::<u64>() {
+                    if let (Some(from), Some(to)) = (
+                        self.nodes.get(self.payment_from_idx).cloned(),
+                        self.nodes.get(self.payment_to_idx).cloned(),
+                    ) {
+                        let memo = if self.payment_memo.is_empty() {
+                            None
+                        } else {
+                            Some(self.payment_memo.clone())
+                        };
+                        let _ = self.command_tx.send(AppCommand::SendPayment {
+                            from_node: from,
+                            to_node: to,
+                            amount,
+                            memo,
+                        });
+                        self.ui_mode = UiMode::Main;
+                    }
+                }
             }
             _ => {}
         }
@@ -674,6 +1037,167 @@ impl App {
                                     Some(format!("Failed to get node info: {}", e));
                             }
                         }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn mine_blocks(&mut self, num_blocks: u32) -> Result<()> {
+        if let Some(idx) = self.selected_network {
+            if let Some(network_name) = self.networks.get(idx).cloned() {
+                self.status_message = Some(format!("Mining {} blocks...", num_blocks));
+
+                let manager = self.network_manager.lock().await;
+
+                match manager.mine_blocks(&network_name, num_blocks).await {
+                    Ok(hashes) => {
+                        self.status_message =
+                            Some(format!("Mined {} blocks successfully", hashes.len()));
+                    }
+                    Err(e) => {
+                        self.status_message = Some(format!("Failed to mine blocks: {}", e));
+                    }
+                }
+            } else {
+                self.status_message = Some("No network selected".to_string());
+            }
+        } else {
+            self.status_message = Some("No network selected".to_string());
+        }
+        Ok(())
+    }
+
+    pub async fn fund_wallet(&mut self, node_name: &str, amount: f64) -> Result<()> {
+        if let Some(idx) = self.selected_network {
+            if let Some(network_name) = self.networks.get(idx).cloned() {
+                self.status_message = Some(format!("Funding {} with {} BTC...", node_name, amount));
+
+                let manager = self.network_manager.lock().await;
+                match manager
+                    .fund_lnd_wallet(&network_name, node_name, amount)
+                    .await
+                {
+                    Ok(txid) => {
+                        self.status_message = Some(format!("Funded wallet. TXID: {}", &txid[..8]));
+                    }
+                    Err(e) => {
+                        self.status_message = Some(format!("Failed to fund wallet: {}", e));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn open_channel(
+        &mut self,
+        from: &str,
+        to: &str,
+        capacity: u64,
+        push_amount: Option<u64>,
+    ) -> Result<()> {
+        if let Some(idx) = self.selected_network {
+            if let Some(network_name) = self.networks.get(idx).cloned() {
+                let push_desc = if let Some(p) = push_amount {
+                    format!(" (push {})", p)
+                } else {
+                    String::new()
+                };
+                self.status_message = Some(format!(
+                    "Opening channel {} → {} capacity: {}{}",
+                    from, to, capacity, push_desc
+                ));
+
+                let manager = self.network_manager.lock().await;
+                match manager
+                    .open_channel(&network_name, from, to, capacity, push_amount)
+                    .await
+                {
+                    Ok(txid) => {
+                        self.status_message =
+                            Some(format!("Channel opened. Funding TXID: {}", &txid[..8]));
+                    }
+                    Err(e) => {
+                        self.status_message = Some(format!("Failed to open channel: {}", e));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn send_payment(
+        &mut self,
+        from: &str,
+        to: &str,
+        amount: u64,
+        memo: Option<&str>,
+    ) -> Result<()> {
+        if let Some(idx) = self.selected_network {
+            if let Some(network_name) = self.networks.get(idx).cloned() {
+                let memo_desc = memo.map(|m| format!(" '{}'", m)).unwrap_or_default();
+                self.status_message = Some(format!(
+                    "Sending {} sats from {} → {}{}",
+                    amount, from, to, memo_desc
+                ));
+
+                let manager = self.network_manager.lock().await;
+                match manager
+                    .send_payment(&network_name, from, to, amount, memo)
+                    .await
+                {
+                    Ok(payment_hash) => {
+                        self.status_message =
+                            Some(format!("Payment sent! Hash: {}", &payment_hash[..16]));
+                    }
+                    Err(e) => {
+                        self.status_message = Some(format!("Failed to send payment: {}", e));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn sync_graph(&mut self) -> Result<()> {
+        if let Some(idx) = self.selected_network {
+            if let Some(network_name) = self.networks.get(idx).cloned() {
+                self.status_message = Some("Syncing Lightning Network graph...".to_string());
+
+                let manager = self.network_manager.lock().await;
+                match manager.sync_graph(&network_name).await {
+                    Ok(synced_nodes) => {
+                        self.status_message = Some(format!(
+                            "Graph synced! {} LND nodes synchronized",
+                            synced_nodes
+                        ));
+                    }
+                    Err(e) => {
+                        self.status_message = Some(format!("Failed to sync graph: {}", e));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn sync_chain(&mut self) -> Result<()> {
+        if let Some(idx) = self.selected_network {
+            if let Some(network_name) = self.networks.get(idx).cloned() {
+                self.status_message = Some("Syncing LND nodes with blockchain...".to_string());
+
+                let manager = self.network_manager.lock().await;
+                match manager.sync_chain(&network_name).await {
+                    Ok(synced_nodes) => {
+                        self.status_message = Some(format!(
+                            "Chain synced! {} LND nodes synchronized with blockchain",
+                            synced_nodes
+                        ));
+                    }
+                    Err(e) => {
+                        self.status_message = Some(format!("Failed to sync chain: {}", e));
                     }
                 }
             }

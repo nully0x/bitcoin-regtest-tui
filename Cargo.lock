@@ -1122,6 +1122,7 @@ dependencies = [
  "polar-core",
  "polar-docker",
  "serde",
+ "serde_json",
  "tokio",
  "tracing",
 ]
@@ -1134,6 +1135,7 @@ dependencies = [
  "polar-core",
  "polar-docker",
  "polar-nodes",
+ "polar-tui",
  "serde_json",
  "tokio",
 ]

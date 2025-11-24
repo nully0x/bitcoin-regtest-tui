@@ -9,6 +9,7 @@ publish = false
 polar-core.workspace = true
 polar-docker.workspace = true
 polar-nodes.workspace = true
+polar-tui = { path = "../polar-tui" }
 tokio.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true

@@ -145,4 +145,304 @@ impl LndNode {
         }
         Ok(())
     }
+
+    /// Get a new on-chain Bitcoin address for depositing funds.
+    pub async fn get_new_address(&self, manager: &ContainerManager) -> Result<String> {
+        let container_id = self
+            .node
+            .container_id
+            .as_ref()
+            .ok_or_else(|| polar_core::Error::Config("LND node not running".to_string()))?;
+
+        let output = manager
+            .exec_command(
+                container_id,
+                vec![
+                    "lncli",
+                    "--network=regtest",
+                    "--tlscertpath=/home/lnd/.lnd/tls.cert",
+                    "--macaroonpath=/home/lnd/.lnd/data/chain/bitcoin/regtest/admin.macaroon",
+                    "newaddress",
+                    "p2wkh",
+                ],
+            )
+            .await?;
+
+        let json: serde_json::Value = serde_json::from_str(&output)
+            .map_err(|e| polar_core::Error::Config(format!("Failed to parse address: {}", e)))?;
+
+        let address = json["address"]
+            .as_str()
+            .ok_or_else(|| polar_core::Error::Config("No address in response".to_string()))?
+            .to_string();
+
+        Ok(address)
+    }
+
+    /// Get the identity public key of the LND node.
+    pub async fn get_pubkey(&self, manager: &ContainerManager) -> Result<String> {
+        let container_id = self
+            .node
+            .container_id
+            .as_ref()
+            .ok_or_else(|| polar_core::Error::Config("LND node not running".to_string()))?;
+
+        let output = manager
+            .exec_command(
+                container_id,
+                vec![
+                    "lncli",
+                    "--network=regtest",
+                    "--tlscertpath=/home/lnd/.lnd/tls.cert",
+                    "--macaroonpath=/home/lnd/.lnd/data/chain/bitcoin/regtest/admin.macaroon",
+                    "getinfo",
+                ],
+            )
+            .await?;
+
+        let json: serde_json::Value = serde_json::from_str(&output)
+            .map_err(|e| polar_core::Error::Config(format!("Failed to parse getinfo: {}", e)))?;
+
+        let pubkey = json["identity_pubkey"]
+            .as_str()
+            .ok_or_else(|| polar_core::Error::Config("No pubkey in response".to_string()))?
+            .to_string();
+
+        Ok(pubkey)
+    }
+
+    /// Connect to another LND node as a peer.
+    ///
+    /// # Arguments
+    /// * `manager` - Docker container manager
+    /// * `peer_pubkey` - Public key of the peer node
+    /// * `peer_host` - Host address of the peer (format: "host:port")
+    pub async fn connect_peer(
+        &self,
+        manager: &ContainerManager,
+        peer_pubkey: &str,
+        peer_host: &str,
+    ) -> Result<()> {
+        let container_id = self
+            .node
+            .container_id
+            .as_ref()
+            .ok_or_else(|| polar_core::Error::Config("LND node not running".to_string()))?;
+
+        let peer_address = format!("{}@{}", peer_pubkey, peer_host);
+
+        manager
+            .exec_command(
+                container_id,
+                vec![
+                    "lncli",
+                    "--network=regtest",
+                    "--tlscertpath=/home/lnd/.lnd/tls.cert",
+                    "--macaroonpath=/home/lnd/.lnd/data/chain/bitcoin/regtest/admin.macaroon",
+                    "connect",
+                    &peer_address,
+                ],
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    /// Open a Lightning channel to another node.
+    ///
+    /// # Arguments
+    /// * `manager` - Docker container manager
+    /// * `peer_pubkey` - Public key of the peer to open channel with
+    /// * `amount` - Channel capacity in satoshis
+    /// * `push_amount` - Amount to push to peer in satoshis (optional)
+    pub async fn open_channel(
+        &self,
+        manager: &ContainerManager,
+        peer_pubkey: &str,
+        amount: u64,
+        push_amount: Option<u64>,
+    ) -> Result<String> {
+        let container_id = self
+            .node
+            .container_id
+            .as_ref()
+            .ok_or_else(|| polar_core::Error::Config("LND node not running".to_string()))?;
+
+        let amount_str = amount.to_string();
+        let push_str = push_amount.map(|p| p.to_string());
+
+        let mut args = vec![
+            "lncli",
+            "--network=regtest",
+            "--tlscertpath=/home/lnd/.lnd/tls.cert",
+            "--macaroonpath=/home/lnd/.lnd/data/chain/bitcoin/regtest/admin.macaroon",
+            "openchannel",
+            peer_pubkey,
+            &amount_str,
+        ];
+
+        if let Some(ref push) = push_str {
+            args.push(push);
+        }
+
+        let output = manager.exec_command(container_id, args).await?;
+
+        // Parse the funding txid from the output
+        let json: serde_json::Value = serde_json::from_str(&output).map_err(|e| {
+            polar_core::Error::Config(format!(
+                "Failed to parse channel open response: {}. Output was: {}",
+                e, output
+            ))
+        })?;
+
+        let funding_txid = json["funding_txid"]
+            .as_str()
+            .ok_or_else(|| {
+                polar_core::Error::Config(format!(
+                    "No funding_txid in response. Full response: {}",
+                    output
+                ))
+            })?
+            .to_string();
+
+        Ok(funding_txid)
+    }
+
+    /// Create an invoice for receiving payment.
+    ///
+    /// # Arguments
+    /// * `manager` - Docker container manager
+    /// * `amount` - Amount in satoshis
+    /// * `memo` - Optional description for the invoice
+    pub async fn create_invoice(
+        &self,
+        manager: &ContainerManager,
+        amount: u64,
+        memo: Option<&str>,
+    ) -> Result<String> {
+        let container_id = self
+            .node
+            .container_id
+            .as_ref()
+            .ok_or_else(|| polar_core::Error::Config("LND node not running".to_string()))?;
+
+        let amount_str = amount.to_string();
+        let memo_str = memo.map(|m| m.to_string());
+
+        let mut args = vec![
+            "lncli",
+            "--network=regtest",
+            "--tlscertpath=/home/lnd/.lnd/tls.cert",
+            "--macaroonpath=/home/lnd/.lnd/data/chain/bitcoin/regtest/admin.macaroon",
+            "addinvoice",
+            "--json", // Add JSON flag for parseable output
+            "--amt",
+            &amount_str,
+        ];
+
+        if let Some(ref m) = memo_str {
+            args.push("--memo");
+            args.push(m);
+        }
+
+        let output = manager.exec_command(container_id, args).await?;
+
+        let json: serde_json::Value = serde_json::from_str(&output).map_err(|e| {
+            polar_core::Error::Config(format!(
+                "Failed to parse invoice: {}. Output was: {}",
+                e, output
+            ))
+        })?;
+
+        let payment_request = json["payment_request"]
+            .as_str()
+            .ok_or_else(|| {
+                polar_core::Error::Config(format!(
+                    "No payment_request in response. Full response: {}",
+                    output
+                ))
+            })?
+            .to_string();
+
+        Ok(payment_request)
+    }
+
+    /// Pay a Lightning invoice.
+    ///
+    /// # Arguments
+    /// * `manager` - Docker container manager
+    /// * `payment_request` - The bolt11 invoice string
+    pub async fn pay_invoice(
+        &self,
+        manager: &ContainerManager,
+        payment_request: &str,
+    ) -> Result<String> {
+        let container_id = self
+            .node
+            .container_id
+            .as_ref()
+            .ok_or_else(|| polar_core::Error::Config("LND node not running".to_string()))?;
+
+        let output = manager
+            .exec_command(
+                container_id,
+                vec![
+                    "lncli",
+                    "--network=regtest",
+                    "--tlscertpath=/home/lnd/.lnd/tls.cert",
+                    "--macaroonpath=/home/lnd/.lnd/data/chain/bitcoin/regtest/admin.macaroon",
+                    "payinvoice",
+                    "--json", // Add JSON flag for parseable output
+                    "--force",
+                    payment_request,
+                ],
+            )
+            .await?;
+
+        let json: serde_json::Value = serde_json::from_str(&output).map_err(|e| {
+            polar_core::Error::Config(format!(
+                "Failed to parse payment response: {}. Output was: {}",
+                e, output
+            ))
+        })?;
+
+        let payment_hash = json["payment_hash"]
+            .as_str()
+            .ok_or_else(|| {
+                polar_core::Error::Config(format!(
+                    "No payment_hash in response. Full response: {}",
+                    output
+                ))
+            })?
+            .to_string();
+
+        Ok(payment_hash)
+    }
+
+    /// List all channels for this node.
+    pub async fn list_channels(&self, manager: &ContainerManager) -> Result<serde_json::Value> {
+        let container_id = self
+            .node
+            .container_id
+            .as_ref()
+            .ok_or_else(|| polar_core::Error::Config("LND node not running".to_string()))?;
+
+        let output = manager
+            .exec_command(
+                container_id,
+                vec![
+                    "lncli",
+                    "--network=regtest",
+                    "--tlscertpath=/home/lnd/.lnd/tls.cert",
+                    "--macaroonpath=/home/lnd/.lnd/data/chain/bitcoin/regtest/admin.macaroon",
+                    "listchannels",
+                ],
+            )
+            .await?;
+
+        let json: serde_json::Value = serde_json::from_str(&output)
+            .map_err(|e| polar_core::Error::Config(format!("Failed to parse channels: {}", e)))?;
+
+        Ok(json)
+    }
 }

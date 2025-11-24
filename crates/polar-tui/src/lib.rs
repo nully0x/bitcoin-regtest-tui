@@ -1,9 +1,10 @@
 mod app;
 mod event;
-mod network_manager;
+pub mod network_manager;
 mod ui;
 
 pub use app::App;
+pub use network_manager::NetworkManager;
 
 use anyhow::Result;
 use crossterm::{

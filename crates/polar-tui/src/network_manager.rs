@@ -747,4 +747,359 @@ impl NetworkManager {
     pub async fn check_docker(&self) -> Result<()> {
         self.container_manager.ping().await
     }
+
+    /// Mine blocks on the Bitcoin node in a network.
+    ///
+    /// # Arguments
+    /// * `network_name` - Name of the network
+    /// * `num_blocks` - Number of blocks to mine (default: 100)
+    pub async fn mine_blocks(&self, network_name: &str, num_blocks: u32) -> Result<Vec<String>> {
+        let network = self
+            .get_network(network_name)
+            .ok_or_else(|| Error::NetworkNotFound(network_name.to_string()))?;
+
+        // Find the Bitcoin node
+        let btc_node = network
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::BitcoinCore)
+            .ok_or_else(|| Error::Config("No Bitcoin node found in network".to_string()))?;
+
+        if btc_node.container_id.is_none() {
+            return Err(Error::Config(
+                "Bitcoin node is not running. Please start the network first.".to_string(),
+            ));
+        }
+
+        let btc_node_obj = BitcoinNode {
+            node: btc_node.clone(),
+            image: network
+                .btc_version
+                .clone()
+                .unwrap_or_else(|| BitcoinNode::DEFAULT_IMAGE.to_string()),
+        };
+
+        btc_node_obj
+            .mine_blocks(&self.container_manager, num_blocks, None)
+            .await
+    }
+
+    /// Fund an LND node's wallet from the Bitcoin node.
+    ///
+    /// # Arguments
+    /// * `network_name` - Name of the network
+    /// * `lnd_node_name` - Name of the LND node to fund
+    /// * `amount` - Amount in BTC
+    pub async fn fund_lnd_wallet(
+        &self,
+        network_name: &str,
+        lnd_node_name: &str,
+        amount: f64,
+    ) -> Result<String> {
+        let network = self
+            .get_network(network_name)
+            .ok_or_else(|| Error::NetworkNotFound(network_name.to_string()))?;
+
+        // Find the Bitcoin node
+        let btc_node = network
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::BitcoinCore)
+            .ok_or_else(|| Error::Config("No Bitcoin node found in network".to_string()))?;
+
+        // Find the LND node
+        let lnd_node = network
+            .nodes
+            .iter()
+            .find(|n| n.name == lnd_node_name && n.kind == NodeKind::Lnd)
+            .ok_or_else(|| Error::Config(format!("LND node '{}' not found", lnd_node_name)))?;
+
+        let btc_node_obj = BitcoinNode {
+            node: btc_node.clone(),
+            image: network
+                .btc_version
+                .clone()
+                .unwrap_or_else(|| BitcoinNode::DEFAULT_IMAGE.to_string()),
+        };
+
+        let lnd_node_obj = LndNode {
+            node: lnd_node.clone(),
+            image: network
+                .lnd_version
+                .clone()
+                .unwrap_or_else(|| LndNode::DEFAULT_IMAGE.to_string()),
+            bitcoin_node: btc_node.id.to_string(),
+            alias: lnd_node.name.clone(),
+        };
+
+        // Get a new address from the LND node
+        let address = lnd_node_obj
+            .get_new_address(&self.container_manager)
+            .await?;
+
+        // Send funds from Bitcoin node to LND address
+        let txid = btc_node_obj
+            .send_to_address(&self.container_manager, &address, amount)
+            .await?;
+
+        Ok(txid)
+    }
+
+    /// Open a Lightning channel between two LND nodes.
+    ///
+    /// # Arguments
+    /// * `network_name` - Name of the network
+    /// * `from_node` - Name of the node opening the channel
+    /// * `to_node` - Name of the node to open channel to
+    /// * `capacity` - Channel capacity in satoshis
+    /// * `push_amount` - Amount to push to peer (optional)
+    pub async fn open_channel(
+        &self,
+        network_name: &str,
+        from_node: &str,
+        to_node: &str,
+        capacity: u64,
+        push_amount: Option<u64>,
+    ) -> Result<String> {
+        let network = self
+            .get_network(network_name)
+            .ok_or_else(|| Error::NetworkNotFound(network_name.to_string()))?;
+
+        // Find both nodes
+        let from = network
+            .nodes
+            .iter()
+            .find(|n| n.name == from_node && n.kind == NodeKind::Lnd)
+            .ok_or_else(|| Error::Config(format!("LND node '{}' not found", from_node)))?;
+
+        let to = network
+            .nodes
+            .iter()
+            .find(|n| n.name == to_node && n.kind == NodeKind::Lnd)
+            .ok_or_else(|| Error::Config(format!("LND node '{}' not found", to_node)))?;
+
+        let from_lnd = LndNode {
+            node: from.clone(),
+            image: network
+                .lnd_version
+                .clone()
+                .unwrap_or_else(|| LndNode::DEFAULT_IMAGE.to_string()),
+            bitcoin_node: String::new(), // Not needed for this operation
+            alias: from.name.clone(),
+        };
+
+        let to_lnd = LndNode {
+            node: to.clone(),
+            image: network
+                .lnd_version
+                .clone()
+                .unwrap_or_else(|| LndNode::DEFAULT_IMAGE.to_string()),
+            bitcoin_node: String::new(),
+            alias: to.name.clone(),
+        };
+
+        // Get the target node's pubkey
+        let to_pubkey = to_lnd.get_pubkey(&self.container_manager).await?;
+
+        // Note: We connect via Docker network using container names, not host ports
+
+        // Connect as peers using the container name (within Docker network)
+        let peer_host = format!("polar-lnd-{}:9735", to.id);
+        from_lnd
+            .connect_peer(&self.container_manager, &to_pubkey, &peer_host)
+            .await?;
+
+        // Open the channel
+        let funding_txid = from_lnd
+            .open_channel(&self.container_manager, &to_pubkey, capacity, push_amount)
+            .await?;
+
+        Ok(funding_txid)
+    }
+
+    /// Send a Lightning payment from one node to another.
+    ///
+    /// # Arguments
+    /// * `network_name` - Name of the network
+    /// * `from_node` - Name of the paying node
+    /// * `to_node` - Name of the receiving node
+    /// * `amount` - Amount in satoshis
+    /// * `memo` - Optional payment memo
+    pub async fn send_payment(
+        &self,
+        network_name: &str,
+        from_node: &str,
+        to_node: &str,
+        amount: u64,
+        memo: Option<&str>,
+    ) -> Result<String> {
+        let network = self
+            .get_network(network_name)
+            .ok_or_else(|| Error::NetworkNotFound(network_name.to_string()))?;
+
+        // Find both nodes
+        let from = network
+            .nodes
+            .iter()
+            .find(|n| n.name == from_node && n.kind == NodeKind::Lnd)
+            .ok_or_else(|| Error::Config(format!("LND node '{}' not found", from_node)))?;
+
+        let to = network
+            .nodes
+            .iter()
+            .find(|n| n.name == to_node && n.kind == NodeKind::Lnd)
+            .ok_or_else(|| Error::Config(format!("LND node '{}' not found", to_node)))?;
+
+        let from_lnd = LndNode {
+            node: from.clone(),
+            image: network
+                .lnd_version
+                .clone()
+                .unwrap_or_else(|| LndNode::DEFAULT_IMAGE.to_string()),
+            bitcoin_node: String::new(),
+            alias: from.name.clone(),
+        };
+
+        let to_lnd = LndNode {
+            node: to.clone(),
+            image: network
+                .lnd_version
+                .clone()
+                .unwrap_or_else(|| LndNode::DEFAULT_IMAGE.to_string()),
+            bitcoin_node: String::new(),
+            alias: to.name.clone(),
+        };
+
+        // Create invoice on receiving node
+        let invoice = to_lnd
+            .create_invoice(&self.container_manager, amount, memo)
+            .await?;
+
+        // Pay invoice from sending node
+        let payment_hash = from_lnd
+            .pay_invoice(&self.container_manager, &invoice)
+            .await?;
+
+        Ok(payment_hash)
+    }
+
+    /// Synchronize the Lightning Network graph across all LND nodes.
+    /// This connects all LND nodes to each other as peers so they can discover
+    /// channels and route payments.
+    ///
+    /// # Arguments
+    /// * `network_name` - Name of the network
+    ///
+    /// # Returns
+    /// Number of LND nodes synchronized
+    pub async fn sync_graph(&self, network_name: &str) -> Result<usize> {
+        let network = self
+            .get_network(network_name)
+            .ok_or_else(|| Error::NetworkNotFound(network_name.to_string()))?;
+
+        // Get all LND nodes
+        let lnd_nodes: Vec<_> = network
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Lnd)
+            .collect();
+
+        if lnd_nodes.len() < 2 {
+            return Ok(0); // Nothing to sync with less than 2 nodes
+        }
+
+        // Connect each LND node to all other LND nodes
+        for (i, from_node) in lnd_nodes.iter().enumerate() {
+            for to_node in lnd_nodes.iter().skip(i + 1) {
+                let from_lnd = LndNode {
+                    node: (*from_node).clone(),
+                    image: network
+                        .lnd_version
+                        .clone()
+                        .unwrap_or_else(|| LndNode::DEFAULT_IMAGE.to_string()),
+                    bitcoin_node: String::new(),
+                    alias: from_node.name.clone(),
+                };
+
+                let to_lnd = LndNode {
+                    node: (*to_node).clone(),
+                    image: network
+                        .lnd_version
+                        .clone()
+                        .unwrap_or_else(|| LndNode::DEFAULT_IMAGE.to_string()),
+                    bitcoin_node: String::new(),
+                    alias: to_node.name.clone(),
+                };
+
+                // Get the target node's pubkey
+                let to_pubkey = to_lnd.get_pubkey(&self.container_manager).await?;
+
+                // Connect as peers using the container name (within Docker network)
+                let peer_host = format!("polar-lnd-{}:9735", to_node.id);
+
+                // Try to connect, but don't fail if already connected
+                let _ = from_lnd
+                    .connect_peer(&self.container_manager, &to_pubkey, &peer_host)
+                    .await;
+            }
+        }
+
+        Ok(lnd_nodes.len())
+    }
+
+    /// Synchronize LND nodes with the Bitcoin blockchain.
+    /// This waits for all LND nodes to be synced to the chain.
+    ///
+    /// # Arguments
+    /// * `network_name` - Name of the network
+    ///
+    /// # Returns
+    /// Number of LND nodes synchronized
+    pub async fn sync_chain(&self, network_name: &str) -> Result<usize> {
+        let network = self
+            .get_network(network_name)
+            .ok_or_else(|| Error::NetworkNotFound(network_name.to_string()))?;
+
+        // Get all LND nodes
+        let lnd_nodes: Vec<_> = network
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Lnd)
+            .collect();
+
+        if lnd_nodes.is_empty() {
+            return Ok(0);
+        }
+
+        // Wait for each LND node to sync with the chain
+        // We'll check if synced_to_chain is true for each node
+        let mut synced_count = 0;
+        for node in &lnd_nodes {
+            if let Some(container_id) = &node.container_id {
+                // Use getinfo to check sync status
+                let output = self.container_manager
+                    .exec_command(
+                        container_id,
+                        vec![
+                            "lncli",
+                            "--network=regtest",
+                            "--tlscertpath=/home/lnd/.lnd/tls.cert",
+                            "--macaroonpath=/home/lnd/.lnd/data/chain/bitcoin/regtest/admin.macaroon",
+                            "getinfo",
+                        ],
+                    )
+                    .await;
+
+                if let Ok(info) = output {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&info) {
+                        if json["synced_to_chain"].as_bool().unwrap_or(false) {
+                            synced_count += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(synced_count)
+    }
 }

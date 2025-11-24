@@ -1,4 +1,4 @@
-//! Main layout rendering for the TUI.
+#! Main layout rendering for the TUI.
 
 use polar_core::{BitcoinNodeInfo, LndNodeInfo, NodeInfo};
 use ratatui::{
@@ -17,6 +17,10 @@ pub fn render(frame: &mut Frame, app: &App) {
         UiMode::CreateNetwork => render_create_network(frame, app),
         UiMode::Main => render_main(frame, app),
         UiMode::NodeDetails => render_node_details(frame, app),
+        UiMode::MineBlocks => render_mine_blocks(frame, app),
+        UiMode::FundWallet => render_fund_wallet(frame, app),
+        UiMode::OpenChannel => render_open_channel(frame, app),
+        UiMode::SendPayment => render_send_payment(frame, app),
     }
 }
 
@@ -181,7 +185,7 @@ fn render_create_network(frame: &mut Frame, app: &App) {
     ]);
     frame.render_widget(Paragraph::new(btc_version_text), chunks[5]);
 
-    // Help text
+    // Help text - all shortcuts on the same line
     let help = vec![
         Line::from(""),
         Line::from(vec![
@@ -192,6 +196,8 @@ fn render_create_network(frame: &mut Frame, app: &App) {
             Span::styled("Enter", Style::default().fg(Color::Green)),
             Span::raw(": Create  |  "),
             Span::styled("Esc", Style::default().fg(Color::Red)),
+            Span::raw(": Quit  |  "),
+            Span::styled("q", Style::default().fg(Color::Red)),
             Span::raw(": Quit"),
         ]),
         Line::from(""),
@@ -202,7 +208,7 @@ fn render_create_network(frame: &mut Frame, app: &App) {
                 .add_modifier(Modifier::ITALIC),
         )),
     ];
-    frame.render_widget(Paragraph::new(help), chunks[6]);
+    frame.render_widget(Paragraph::new(help).wrap(Wrap { trim: false }), chunks[6]);
 }
 
 /// Render the networks panel (left).
@@ -288,29 +294,53 @@ fn render_logs_panel(frame: &mut Frame, app: &App, area: Rect) {
 /// Render the status bar (bottom).
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let help_text = vec![Line::from(vec![
-        Span::raw("Tab: Switch Panel | "),
-        Span::raw("↑↓/k/j: Navigate | "),
+        Span::raw("Tab: Switch | ↑↓/k/j: Navigate | "),
         Span::styled("n", Style::default().fg(Color::Cyan)),
         Span::raw(": New | "),
         Span::styled("s", Style::default().fg(Color::Green)),
         Span::raw(": Start | "),
         Span::styled("x", Style::default().fg(Color::Red)),
         Span::raw(": Stop | "),
-        Span::styled("a", Style::default().fg(Color::Yellow)),
-        Span::raw(": Add Node | "),
         Span::styled("d", Style::default().fg(Color::Red)),
         Span::raw(": Delete | "),
-        Span::styled("i/Enter", Style::default().fg(Color::Magenta)),
+        Span::styled("i", Style::default().fg(Color::Magenta)),
         Span::raw(": Info | "),
+        Span::styled("m", Style::default().fg(Color::Yellow)),
+        Span::raw(": Mine | "),
+        Span::styled("f", Style::default().fg(Color::Yellow)),
+        Span::raw(": Fund | "),
+        Span::styled("c", Style::default().fg(Color::Yellow)),
+        Span::raw(": Channel | "),
+        Span::styled("p", Style::default().fg(Color::Yellow)),
+        Span::raw(": Payment | "),
+        Span::styled("g", Style::default().fg(Color::Cyan)),
+        Span::raw(": Graph | "),
+        Span::styled("y", Style::default().fg(Color::Cyan)),
+        Span::raw(": Chain | "),
         Span::raw("q: Quit"),
     ])];
 
     let mut status_lines = help_text;
 
     if let Some(ref msg) = app.status_message {
+        // Determine if this is an error message
+        let is_error = msg.contains("Failed") || msg.contains("Error") || msg.contains("error");
+
         status_lines.push(Line::from(vec![
-            Span::styled("Status: ", Style::default().fg(Color::Cyan)),
-            Span::raw(msg),
+            Span::styled(
+                if is_error { "⚠ Error: " } else { "Status: " },
+                Style::default()
+                    .fg(if is_error { Color::Red } else { Color::Cyan })
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                msg,
+                if is_error {
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Green)
+                },
+            ),
         ]));
     }
 
@@ -375,7 +405,7 @@ fn render_node_details(frame: &mut Frame, app: &App) {
             }
         }
 
-        // Add help text at the bottom
+        // Add help text at the bottom - all shortcuts on the same line
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled("↑↓/j/k", Style::default().fg(Color::Cyan)),
@@ -585,4 +615,235 @@ fn render_lnd_info(info: &LndNodeInfo) -> Vec<Line<'static>> {
             Span::raw(info.grpc_host.clone()),
         ]),
     ]
+}
+
+/// Helper function to create a form field line.
+fn create_form_field<'a>(
+    label: &'a str,
+    value: &'a str,
+    is_active: bool,
+    show_cursor: bool,
+) -> Line<'a> {
+    let label_style = if is_active {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Cyan)
+    };
+
+    let value_style = if is_active {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let mut spans = vec![
+        Span::styled(format!("{:<20}", label), label_style),
+        Span::styled(value, value_style),
+    ];
+
+    if is_active && show_cursor {
+        spans.push(Span::styled("_", Style::default().fg(Color::Yellow)));
+    }
+
+    Line::from(spans)
+}
+
+/// Render the mine blocks dialog.
+fn render_mine_blocks(frame: &mut Frame, app: &App) {
+    let area = centered_rect(50, 30, frame.area());
+
+    let block = Block::default()
+        .title(" Mine Blocks ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let text = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Number of blocks: ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                &app.mine_blocks_count,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("_"),
+        ]),
+        Line::from(""),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Enter a number and press Enter to mine blocks | Esc: Cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(text).block(block).wrap(Wrap { trim: true });
+
+    frame.render_widget(paragraph, area);
+}
+
+/// Render the fund wallet dialog.
+fn render_fund_wallet(frame: &mut Frame, app: &App) {
+    let area = centered_rect(60, 40, frame.area());
+
+    let block = Block::default()
+        .title(" Fund Wallet ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let node_name = app
+        .nodes
+        .get(app.fund_node_idx)
+        .map(|s| s.as_str())
+        .unwrap_or("None");
+
+    let text = vec![
+        Line::from(""),
+        create_form_field("Node:", node_name, app.fund_form_field == 0, false),
+        Line::from(Span::styled(
+            "  (Use ← → to change)",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        create_form_field(
+            "Amount (BTC):",
+            &app.fund_amount,
+            app.fund_form_field == 1,
+            true,
+        ),
+        Line::from(""),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Tab/↑↓: Navigate | ← →: Select node | Enter: Fund | Esc: Cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(text).block(block).wrap(Wrap { trim: true });
+
+    frame.render_widget(paragraph, area);
+}
+
+/// Render the open channel dialog.
+fn render_open_channel(frame: &mut Frame, app: &App) {
+    let area = centered_rect(70, 50, frame.area());
+
+    let block = Block::default()
+        .title(" Open Lightning Channel ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let from_node = app
+        .nodes
+        .get(app.channel_from_idx)
+        .map(|s| s.as_str())
+        .unwrap_or("None");
+    let to_node = app
+        .nodes
+        .get(app.channel_to_idx)
+        .map(|s| s.as_str())
+        .unwrap_or("None");
+
+    let text = vec![
+        Line::from(""),
+        create_form_field("From Node:", from_node, app.channel_form_field == 0, false),
+        Line::from(Span::styled(
+            "  (Use ← → to change)",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        create_form_field("To Node:", to_node, app.channel_form_field == 1, false),
+        Line::from(Span::styled(
+            "  (Use ← → to change)",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        create_form_field(
+            "Capacity (sats):",
+            &app.channel_capacity,
+            app.channel_form_field == 2,
+            true,
+        ),
+        Line::from(""),
+        create_form_field(
+            "Push Amount (sats):",
+            &app.channel_push_amount,
+            app.channel_form_field == 3,
+            true,
+        ),
+        Line::from(""),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Tab/↑↓: Navigate | ← →: Select nodes | Enter: Open | Esc: Cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(text).block(block).wrap(Wrap { trim: true });
+
+    frame.render_widget(paragraph, area);
+}
+
+/// Render the send payment dialog.
+fn render_send_payment(frame: &mut Frame, app: &App) {
+    let area = centered_rect(70, 50, frame.area());
+
+    let block = Block::default()
+        .title(" Send Lightning Payment ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let from_node = app
+        .nodes
+        .get(app.payment_from_idx)
+        .map(|s| s.as_str())
+        .unwrap_or("None");
+    let to_node = app
+        .nodes
+        .get(app.payment_to_idx)
+        .map(|s| s.as_str())
+        .unwrap_or("None");
+
+    let text = vec![
+        Line::from(""),
+        create_form_field("From Node:", from_node, app.payment_form_field == 0, false),
+        Line::from(Span::styled(
+            "  (Use ← → to change)",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        create_form_field("To Node:", to_node, app.payment_form_field == 1, false),
+        Line::from(Span::styled(
+            "  (Use ← → to change)",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        create_form_field(
+            "Amount (sats):",
+            &app.payment_amount,
+            app.payment_form_field == 2,
+            true,
+        ),
+        Line::from(""),
+        create_form_field(
+            "Memo:",
+            &app.payment_memo,
+            app.payment_form_field == 3,
+            true,
+        ),
+        Line::from(""),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Tab/↑↓: Navigate | ← →: Select nodes | Enter: Send | Esc: Cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(text).block(block).wrap(Wrap { trim: true });
+
+    frame.render_widget(paragraph, area);
 }
