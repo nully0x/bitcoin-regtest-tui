@@ -1072,11 +1072,17 @@ impl App {
     pub async fn fund_wallet(&mut self, node_name: &str, amount: f64) -> Result<()> {
         if let Some(idx) = self.selected_network {
             if let Some(network_name) = self.networks.get(idx).cloned() {
-                self.status_message = Some(format!("Funding {} with {} BTC...", node_name, amount));
+                // Parse node name from "name (type)" format if needed
+                let actual_node_name = node_name.split(" (").next().unwrap_or(node_name);
+
+                self.status_message = Some(format!(
+                    "Funding {} with {} BTC...",
+                    actual_node_name, amount
+                ));
 
                 let manager = self.network_manager.lock().await;
                 match manager
-                    .fund_lnd_wallet(&network_name, node_name, amount)
+                    .fund_lnd_wallet(&network_name, actual_node_name, amount)
                     .await
                 {
                     Ok(txid) => {
@@ -1100,6 +1106,10 @@ impl App {
     ) -> Result<()> {
         if let Some(idx) = self.selected_network {
             if let Some(network_name) = self.networks.get(idx).cloned() {
+                // Parse node names from "name (type)" format if needed
+                let actual_from = from.split(" (").next().unwrap_or(from);
+                let actual_to = to.split(" (").next().unwrap_or(to);
+
                 let push_desc = if let Some(p) = push_amount {
                     format!(" (push {})", p)
                 } else {
@@ -1107,12 +1117,12 @@ impl App {
                 };
                 self.status_message = Some(format!(
                     "Opening channel {} → {} capacity: {}{}",
-                    from, to, capacity, push_desc
+                    actual_from, actual_to, capacity, push_desc
                 ));
 
                 let manager = self.network_manager.lock().await;
                 match manager
-                    .open_channel(&network_name, from, to, capacity, push_amount)
+                    .open_channel(&network_name, actual_from, actual_to, capacity, push_amount)
                     .await
                 {
                     Ok(txid) => {
@@ -1137,15 +1147,19 @@ impl App {
     ) -> Result<()> {
         if let Some(idx) = self.selected_network {
             if let Some(network_name) = self.networks.get(idx).cloned() {
+                // Parse node names from "name (type)" format if needed
+                let actual_from = from.split(" (").next().unwrap_or(from);
+                let actual_to = to.split(" (").next().unwrap_or(to);
+
                 let memo_desc = memo.map(|m| format!(" '{}'", m)).unwrap_or_default();
                 self.status_message = Some(format!(
                     "Sending {} sats from {} → {}{}",
-                    amount, from, to, memo_desc
+                    amount, actual_from, actual_to, memo_desc
                 ));
 
                 let manager = self.network_manager.lock().await;
                 match manager
-                    .send_payment(&network_name, from, to, amount, memo)
+                    .send_payment(&network_name, actual_from, actual_to, amount, memo)
                     .await
                 {
                     Ok(payment_hash) => {

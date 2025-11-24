@@ -71,6 +71,7 @@ impl BitcoinNode {
             "-rpcbind=0.0.0.0".to_string(),
             "-zmqpubrawblock=tcp://0.0.0.0:28334".to_string(),
             "-zmqpubrawtx=tcp://0.0.0.0:28335".to_string(),
+            "-fallbackfee=0.00001".to_string(), // Enable fallback fee for regtest
         ];
 
         // Configure port mappings if ports are provided

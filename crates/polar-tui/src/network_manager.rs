@@ -790,11 +790,36 @@ impl NetworkManager {
     /// * `network_name` - Name of the network
     /// * `lnd_node_name` - Name of the LND node to fund
     /// * `amount` - Amount in BTC
+    /// * `auto_mine` - Whether to automatically mine blocks to confirm the transaction (default: true)
+    ///
+    /// # Returns
+    /// The transaction ID of the funding transaction
     pub async fn fund_lnd_wallet(
         &self,
         network_name: &str,
         lnd_node_name: &str,
         amount: f64,
+    ) -> Result<String> {
+        self.fund_lnd_wallet_with_options(network_name, lnd_node_name, amount, true)
+            .await
+    }
+
+    /// Fund an LND node's wallet from the Bitcoin node with custom options.
+    ///
+    /// # Arguments
+    /// * `network_name` - Name of the network
+    /// * `lnd_node_name` - Name of the LND node to fund
+    /// * `amount` - Amount in BTC
+    /// * `auto_mine` - Whether to automatically mine blocks to confirm the transaction
+    ///
+    /// # Returns
+    /// The transaction ID of the funding transaction
+    pub async fn fund_lnd_wallet_with_options(
+        &self,
+        network_name: &str,
+        lnd_node_name: &str,
+        amount: f64,
+        auto_mine: bool,
     ) -> Result<String> {
         let network = self
             .get_network(network_name)
@@ -832,6 +857,15 @@ impl NetworkManager {
             alias: lnd_node.name.clone(),
         };
 
+        // Check Bitcoin node balance before attempting to send
+        let btc_balance = btc_node_obj.get_balance(&self.container_manager).await?;
+        if btc_balance < amount {
+            return Err(Error::Config(format!(
+                "Insufficient balance in Bitcoin node. Have: {} BTC, Need: {} BTC. Try mining blocks first.",
+                btc_balance, amount
+            )));
+        }
+
         // Get a new address from the LND node
         let address = lnd_node_obj
             .get_new_address(&self.container_manager)
@@ -841,6 +875,14 @@ impl NetworkManager {
         let txid = btc_node_obj
             .send_to_address(&self.container_manager, &address, amount)
             .await?;
+
+        // Mine blocks to confirm the transaction if auto_mine is enabled
+        if auto_mine {
+            eprintln!("[DEBUG] Auto-mining 6 blocks to confirm funding transaction");
+            btc_node_obj
+                .mine_blocks(&self.container_manager, 6, None)
+                .await?;
+        }
 
         Ok(txid)
     }

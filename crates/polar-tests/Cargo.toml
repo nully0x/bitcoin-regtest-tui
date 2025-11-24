@@ -13,6 +13,7 @@ polar-tui = { path = "../polar-tui" }
 tokio.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
+futures = "0.3"
 
 [lints]
 workspace = true

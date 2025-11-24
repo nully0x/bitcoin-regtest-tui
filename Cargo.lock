@@ -1132,6 +1132,7 @@ name = "polar-tests"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "futures",
  "polar-core",
  "polar-docker",
  "polar-nodes",
