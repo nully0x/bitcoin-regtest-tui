@@ -335,7 +335,6 @@ impl LndNode {
             "--tlscertpath=/home/lnd/.lnd/tls.cert",
             "--macaroonpath=/home/lnd/.lnd/data/chain/bitcoin/regtest/admin.macaroon",
             "addinvoice",
-            "--json", // Add JSON flag for parseable output
             "--amt",
             &amount_str,
         ];
@@ -383,6 +382,7 @@ impl LndNode {
             .as_ref()
             .ok_or_else(|| polar_core::Error::Config("LND node not running".to_string()))?;
 
+        // Use payinvoice with --force and --json flags for non-interactive execution
         let output = manager
             .exec_command(
                 container_id,
@@ -392,8 +392,8 @@ impl LndNode {
                     "--tlscertpath=/home/lnd/.lnd/tls.cert",
                     "--macaroonpath=/home/lnd/.lnd/data/chain/bitcoin/regtest/admin.macaroon",
                     "payinvoice",
-                    "--json", // Add JSON flag for parseable output
                     "--force",
+                    "--json",
                     payment_request,
                 ],
             )
