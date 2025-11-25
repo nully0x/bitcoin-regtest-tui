@@ -20,6 +20,7 @@ anyhow.workspace = true
 tracing.workspace = true
 futures.workspace = true
 serde_json.workspace = true
+arboard.workspace = true
 
 [lints]
 workspace = true

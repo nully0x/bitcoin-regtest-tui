@@ -404,18 +404,35 @@ fn render_node_details(frame: &mut Frame, app: &App) {
                 lines.extend(render_bitcoin_info(info));
             }
             NodeInfo::Lnd(info) => {
-                lines.extend(render_lnd_info(info));
+                lines.extend(render_lnd_info(info, app.selected_channel_idx));
             }
         }
 
         // Add help text at the bottom - all shortcuts on the same line
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
+        let mut help_spans = vec![
             Span::styled("↑↓/j/k", Style::default().fg(Color::Cyan)),
             Span::raw(": Scroll  |  "),
+        ];
+
+        // Add channel navigation help if there are channels
+        if let NodeInfo::Lnd(info) = node_info {
+            if !info.channels.is_empty() {
+                help_spans.extend(vec![
+                    Span::styled("n/p", Style::default().fg(Color::Cyan)),
+                    Span::raw(": Next/Prev Channel  |  "),
+                    Span::styled("c", Style::default().fg(Color::Cyan)),
+                    Span::raw(": Copy Channel Point  |  "),
+                ]);
+            }
+        }
+
+        help_spans.extend(vec![
             Span::styled("Esc/q", Style::default().fg(Color::Red)),
             Span::raw(": Back"),
-        ]));
+        ]);
+
+        lines.push(Line::from(help_spans));
 
         let paragraph = Paragraph::new(lines)
             .block(
@@ -507,7 +524,7 @@ fn render_bitcoin_info(info: &BitcoinNodeInfo) -> Vec<Line<'static>> {
 }
 
 /// Render LND node information.
-fn render_lnd_info(info: &LndNodeInfo) -> Vec<Line<'static>> {
+fn render_lnd_info(info: &LndNodeInfo, selected_channel_idx: Option<usize>) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(vec![Span::styled(
             "LND Node",
@@ -638,6 +655,8 @@ fn render_lnd_info(info: &LndNodeInfo) -> Vec<Line<'static>> {
         lines.push(Line::from(""));
 
         for (idx, channel) in info.channels.iter().enumerate() {
+            let is_selected = selected_channel_idx == Some(idx);
+
             let status_color = if channel.active {
                 Color::Green
             } else {
@@ -645,16 +664,30 @@ fn render_lnd_info(info: &LndNodeInfo) -> Vec<Line<'static>> {
             };
             let status = if channel.active { "Active" } else { "Inactive" };
 
-            lines.push(Line::from(vec![Span::styled(
-                format!("Channel {} ({})", idx + 1, status),
+            // Highlight selected channel
+            let title_prefix = if is_selected { "► " } else { "  " };
+            let title_style = if is_selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            } else {
                 Style::default()
                     .fg(status_color)
-                    .add_modifier(Modifier::BOLD),
+                    .add_modifier(Modifier::BOLD)
+            };
+
+            lines.push(Line::from(vec![Span::styled(
+                format!("{}Channel {} ({})", title_prefix, idx + 1, status),
+                title_style,
             )]));
 
-            // Show abbreviated channel point
+            // Show full channel point for selected channel, abbreviated for others
             let chan_point = &channel.channel_point;
-            let chan_point_display = if chan_point.len() > 40 {
+            let chan_point_display = if is_selected {
+                // Show full channel point when selected for easy manual copying
+                chan_point.clone()
+            } else if chan_point.len() > 40 {
+                // Abbreviate non-selected channels
                 format!(
                     "{}...:{}",
                     &chan_point[..37],
@@ -664,30 +697,44 @@ fn render_lnd_info(info: &LndNodeInfo) -> Vec<Line<'static>> {
                 chan_point.clone()
             };
 
+            let field_style = if is_selected {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Cyan)
+            };
+
+            let value_style = if is_selected {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
             lines.push(Line::from(vec![
-                Span::styled("  Point:        ", Style::default().fg(Color::Cyan)),
-                Span::raw(chan_point_display),
+                Span::styled("  Point:        ", field_style),
+                Span::styled(chan_point_display, value_style),
             ]));
             lines.push(Line::from(vec![
-                Span::styled("  Capacity:     ", Style::default().fg(Color::Cyan)),
-                Span::styled(
-                    format!("{} sats", channel.capacity),
-                    Style::default().fg(Color::White),
-                ),
+                Span::styled("  Capacity:     ", field_style),
+                Span::styled(format!("{} sats", channel.capacity), value_style),
             ]));
             lines.push(Line::from(vec![
-                Span::styled("  Local:        ", Style::default().fg(Color::Cyan)),
+                Span::styled("  Local:        ", field_style),
                 Span::styled(
                     format!("{} sats", channel.local_balance),
-                    Style::default().fg(Color::Green),
+                    if is_selected {
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Green)
+                    },
                 ),
             ]));
             lines.push(Line::from(vec![
-                Span::styled("  Remote:       ", Style::default().fg(Color::Cyan)),
-                Span::styled(
-                    format!("{} sats", channel.remote_balance),
-                    Style::default().fg(Color::White),
-                ),
+                Span::styled("  Remote:       ", field_style),
+                Span::styled(format!("{} sats", channel.remote_balance), value_style),
             ]));
             lines.push(Line::from(""));
         }

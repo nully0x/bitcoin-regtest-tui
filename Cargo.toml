@@ -53,6 +53,7 @@ async-trait = "0.1"
 # Utilities
 directories = "5.0"
 uuid = { version = "1.11", features = ["v4", "serde"] }
+arboard = "3.4"
 
 # Internal crates
 polar-core = { path = "crates/polar-core" }

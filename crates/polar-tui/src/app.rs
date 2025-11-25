@@ -133,6 +133,8 @@ pub struct App {
     pub node_info: Option<NodeInfo>,
     /// Node info scroll position
     pub node_info_scroll: usize,
+    /// Selected channel index in node details view (for copying)
+    pub selected_channel_idx: Option<usize>,
 
     // Mine blocks form state
     /// Number of blocks to mine
@@ -221,6 +223,7 @@ impl App {
             create_form_field: 0,
             node_info: None,
             node_info_scroll: 0,
+            selected_channel_idx: None,
             // Lightning operation form defaults
             mine_blocks_count: "100".to_string(),
             fund_node_idx: 0,
@@ -637,12 +640,85 @@ impl App {
                 self.ui_mode = UiMode::Main;
                 self.node_info = None;
                 self.node_info_scroll = 0;
+                self.selected_channel_idx = None;
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.node_info_scroll = self.node_info_scroll.saturating_sub(1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.node_info_scroll = self.node_info_scroll.saturating_add(1);
+            }
+            KeyCode::Char('n') => {
+                // Next channel (select next)
+                if let Some(NodeInfo::Lnd(ref info)) = self.node_info {
+                    if !info.channels.is_empty() {
+                        self.selected_channel_idx = Some(
+                            self.selected_channel_idx
+                                .map(|idx| (idx + 1) % info.channels.len())
+                                .unwrap_or(0),
+                        );
+                    }
+                }
+            }
+            KeyCode::Char('p') => {
+                // Previous channel
+                if let Some(NodeInfo::Lnd(ref info)) = self.node_info {
+                    if !info.channels.is_empty() {
+                        self.selected_channel_idx = Some(
+                            self.selected_channel_idx
+                                .map(|idx| {
+                                    if idx == 0 {
+                                        info.channels.len() - 1
+                                    } else {
+                                        idx - 1
+                                    }
+                                })
+                                .unwrap_or(info.channels.len() - 1),
+                        );
+                    }
+                }
+            }
+            KeyCode::Char('c') => {
+                // Copy selected channel point to clipboard
+                if let Some(NodeInfo::Lnd(ref info)) = self.node_info {
+                    if let Some(idx) = self.selected_channel_idx {
+                        if let Some(channel) = info.channels.get(idx) {
+                            let channel_point = channel.channel_point.clone();
+                            let channel_point_preview = if channel_point.len() > 20 {
+                                format!("{}...", &channel_point[..20])
+                            } else {
+                                channel_point.clone()
+                            };
+
+                            // Try to copy to clipboard
+                            match arboard::Clipboard::new() {
+                                Ok(mut clipboard) => match clipboard.set_text(channel_point) {
+                                    Ok(_) => {
+                                        self.status_message = Some(format!(
+                                            "Copied to clipboard: {}",
+                                            channel_point_preview
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        self.status_message = Some(format!(
+                                            "Clipboard copy failed: {}. Channel point is shown in full above for manual copy.",
+                                            e
+                                        ));
+                                    }
+                                },
+                                Err(e) => {
+                                    self.status_message = Some(format!(
+                                        "Clipboard unavailable: {}. Channel point is shown in full above for manual copy.",
+                                        e
+                                    ));
+                                }
+                            }
+                        }
+                    } else {
+                        self.status_message =
+                            Some("Press 'n' to select a channel first".to_string());
+                    }
+                }
             }
             _ => {}
         }
