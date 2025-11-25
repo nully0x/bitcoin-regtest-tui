@@ -6,6 +6,7 @@ mod integration {
     mod channel_operations;
     mod funding_flow;
     mod network_operations;
+    mod node_deletion;
     mod node_info;
     mod payment_operations;
 }

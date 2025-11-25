@@ -827,6 +827,73 @@ impl NetworkManager {
         Ok(node_name)
     }
 
+    /// Remove a Lightning node from a network.
+    ///
+    /// # Arguments
+    /// * `network_name` - Name of the network
+    /// * `node_name` - Name of the node to remove
+    ///
+    /// # Returns
+    /// Success or error
+    pub async fn delete_lightning_node(
+        &mut self,
+        network_name: &str,
+        node_name: &str,
+    ) -> Result<()> {
+        let network = self
+            .networks
+            .get_mut(network_name)
+            .ok_or_else(|| Error::NetworkNotFound(network_name.to_string()))?;
+
+        // Find the node
+        let node = network
+            .nodes
+            .iter()
+            .find(|n| n.name == node_name)
+            .ok_or_else(|| Error::Config(format!("Node '{}' not found", node_name)))?;
+
+        // Don't allow deleting Bitcoin node
+        if node.kind == NodeKind::BitcoinCore {
+            return Err(Error::Config(
+                "Cannot delete Bitcoin node. Delete the entire network instead.".to_string(),
+            ));
+        }
+
+        // If node is running, stop it first
+        if node.container_id.is_some() {
+            let node_clone = node.clone();
+            let node_kind = node.kind;
+
+            match node_kind {
+                NodeKind::Lnd => {
+                    let mut lnd_node = LndNode {
+                        node: node_clone,
+                        image: network
+                            .lnd_version
+                            .clone()
+                            .unwrap_or_else(|| LndNode::DEFAULT_IMAGE.to_string()),
+                        bitcoin_node: String::new(),
+                        alias: String::new(),
+                    };
+                    lnd_node.stop(&self.container_manager).await?;
+                }
+                NodeKind::BitcoinCore => {
+                    // Already checked above, but included for completeness
+                    return Err(Error::Config("Cannot delete Bitcoin node".to_string()));
+                }
+            }
+        }
+
+        // Remove the node from the network
+        network.nodes.retain(|n| n.name != node_name);
+
+        // Save the updated network state
+        let network_clone = network.clone();
+        self.save_network(&network_clone)?;
+
+        Ok(())
+    }
+
     /// Check if Docker is available.
     pub async fn check_docker(&self) -> Result<()> {
         self.container_manager.ping().await

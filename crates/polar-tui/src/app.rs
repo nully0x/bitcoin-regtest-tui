@@ -25,6 +25,9 @@ pub enum AppCommand {
     AddLightningNode {
         implementation: LightningImpl,
     },
+    DeleteLightningNode {
+        node_name: String,
+    },
     ViewNodeDetails,
     MineBlocks {
         num_blocks: u32,
@@ -336,6 +339,9 @@ impl App {
                     AppCommand::AddLightningNode { implementation } => {
                         self.add_lightning_node(implementation).await?;
                     }
+                    AppCommand::DeleteLightningNode { node_name } => {
+                        self.delete_lightning_node(&node_name).await?;
+                    }
                     AppCommand::ViewNodeDetails => {
                         self.view_node_details().await?;
                     }
@@ -566,6 +572,31 @@ impl App {
                         let _ = self.command_tx.send(AppCommand::AddLightningNode {
                             implementation: LightningImpl::Lnd,
                         });
+                    }
+                }
+            }
+            KeyCode::Char('r') => {
+                // Remove/Delete Lightning node
+                if self.active_panel == ActivePanel::Nodes {
+                    if let Some(node_idx) = self.selected_node {
+                        if let Some(node_display) = self.nodes.get(node_idx) {
+                            // Extract node name (remove the status prefix like "[stopped] " or "[running] ")
+                            let node_name = node_display
+                                .split(']')
+                                .last()
+                                .unwrap_or(node_display)
+                                .trim()
+                                .split(" (")
+                                .next()
+                                .unwrap_or("")
+                                .to_string();
+
+                            if !node_name.is_empty() {
+                                let _ = self
+                                    .command_tx
+                                    .send(AppCommand::DeleteLightningNode { node_name });
+                            }
+                        }
                     }
                 }
             }
@@ -1186,6 +1217,34 @@ impl App {
                     }
                     Err(e) => {
                         self.status_message = Some(format!("Failed to add node: {}", e));
+                    }
+                }
+                drop(manager);
+
+                self.refresh_networks().await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Delete a Lightning node from the network.
+    pub async fn delete_lightning_node(&mut self, node_name: &str) -> Result<()> {
+        if let Some(idx) = self.selected_network {
+            if let Some(network_name) = self.networks.get(idx).cloned() {
+                self.status_message = Some(format!("Deleting node '{}'...", node_name));
+
+                let mut manager = self.network_manager.lock().await;
+                match manager
+                    .delete_lightning_node(&network_name, node_name)
+                    .await
+                {
+                    Ok(()) => {
+                        self.status_message =
+                            Some(format!("Node '{}' deleted successfully", node_name));
+                        self.selected_node = None; // Clear node selection
+                    }
+                    Err(e) => {
+                        self.status_message = Some(format!("Failed to delete node: {}", e));
                     }
                 }
                 drop(manager);
