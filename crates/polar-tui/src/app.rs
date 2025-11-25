@@ -39,6 +39,11 @@ pub enum AppCommand {
         capacity: u64,
         push_amount: Option<u64>,
     },
+    CloseChannel {
+        node_name: String,
+        channel_point: String,
+        force: bool,
+    },
     SendPayment {
         from_node: String,
         to_node: String,
@@ -65,6 +70,8 @@ pub enum UiMode {
     FundWallet,
     /// Open channel dialog
     OpenChannel,
+    /// Close channel dialog
+    CloseChannel,
     /// Send payment dialog
     SendPayment,
 }
@@ -162,6 +169,16 @@ pub struct App {
     pub payment_memo: String,
     /// Active field in payment form (0=from, 1=to, 2=amount, 3=memo)
     pub payment_form_field: usize,
+
+    // Close channel form state
+    /// Selected node index for channel close
+    pub close_channel_node_idx: usize,
+    /// Channel point (txid:index)
+    pub close_channel_point: String,
+    /// Force close flag
+    pub close_channel_force: bool,
+    /// Active field in close channel form (0=node, 1=channel_point, 2=force)
+    pub close_channel_form_field: usize,
 }
 
 impl Default for App {
@@ -219,6 +236,10 @@ impl App {
             payment_amount: "10000".to_string(),
             payment_memo: String::new(),
             payment_form_field: 0,
+            close_channel_node_idx: 0,
+            close_channel_point: String::new(),
+            close_channel_force: false,
+            close_channel_form_field: 0,
         }
     }
 
@@ -330,6 +351,14 @@ impl App {
                         self.open_channel(&from_node, &to_node, capacity, push_amount)
                             .await?;
                     }
+                    AppCommand::CloseChannel {
+                        node_name,
+                        channel_point,
+                        force,
+                    } => {
+                        self.close_channel(&node_name, &channel_point, force)
+                            .await?;
+                    }
                     AppCommand::SendPayment {
                         from_node,
                         to_node,
@@ -372,6 +401,7 @@ impl App {
             UiMode::MineBlocks => self.handle_mine_blocks_key(code),
             UiMode::FundWallet => self.handle_fund_wallet_key(code),
             UiMode::OpenChannel => self.handle_open_channel_key(code),
+            UiMode::CloseChannel => self.handle_close_channel_key(code),
             UiMode::SendPayment => self.handle_send_payment_key(code),
         }
     }
@@ -563,6 +593,16 @@ impl App {
                     self.channel_form_field = 0;
                 }
             }
+            KeyCode::Char('l') => {
+                // Close channel - need at least 1 LND node
+                if self.selected_network.is_some() && !self.nodes.is_empty() {
+                    self.ui_mode = UiMode::CloseChannel;
+                    self.close_channel_node_idx = 0;
+                    self.close_channel_point.clear();
+                    self.close_channel_force = false;
+                    self.close_channel_form_field = 0;
+                }
+            }
             KeyCode::Char('p') => {
                 // Send payment - need at least 2 LND nodes
                 if self.selected_network.is_some() && self.nodes.len() >= 2 {
@@ -730,6 +770,58 @@ impl App {
                             to_node: to,
                             capacity,
                             push_amount,
+                        });
+                        self.ui_mode = UiMode::Main;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_close_channel_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.ui_mode = UiMode::Main;
+            }
+            KeyCode::Tab | KeyCode::Down => {
+                self.close_channel_form_field = (self.close_channel_form_field + 1) % 3;
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                self.close_channel_form_field = if self.close_channel_form_field == 0 {
+                    2
+                } else {
+                    self.close_channel_form_field - 1
+                };
+            }
+            KeyCode::Left => match self.close_channel_form_field {
+                0 if self.close_channel_node_idx > 0 => self.close_channel_node_idx -= 1,
+                2 => self.close_channel_force = false,
+                _ => {}
+            },
+            KeyCode::Right => match self.close_channel_form_field {
+                0 if self.close_channel_node_idx < self.nodes.len().saturating_sub(1) => {
+                    self.close_channel_node_idx += 1
+                }
+                2 => self.close_channel_force = true,
+                _ => {}
+            },
+            KeyCode::Char(c) if self.close_channel_form_field == 1 => {
+                // Allow typing channel point (txid:index)
+                if c.is_ascii_hexdigit() || c == ':' {
+                    self.close_channel_point.push(c);
+                }
+            }
+            KeyCode::Backspace if self.close_channel_form_field == 1 => {
+                self.close_channel_point.pop();
+            }
+            KeyCode::Enter => {
+                if !self.close_channel_point.is_empty() {
+                    if let Some(node_name) = self.nodes.get(self.close_channel_node_idx).cloned() {
+                        let _ = self.command_tx.send(AppCommand::CloseChannel {
+                            node_name,
+                            channel_point: self.close_channel_point.clone(),
+                            force: self.close_channel_force,
                         });
                         self.ui_mode = UiMode::Main;
                     }
@@ -1150,6 +1242,45 @@ impl App {
                     }
                     Err(e) => {
                         self.status_message = Some(format!("Failed to open channel: {}", e));
+                    }
+                }
+                drop(manager);
+
+                // Refresh network state to update UI
+                self.refresh_networks().await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn close_channel(
+        &mut self,
+        node_name: &str,
+        channel_point: &str,
+        force: bool,
+    ) -> Result<()> {
+        if let Some(idx) = self.selected_network {
+            if let Some(network_name) = self.networks.get(idx).cloned() {
+                // Parse node name from "name (type)" format if needed
+                let actual_node = node_name.split(" (").next().unwrap_or(node_name);
+
+                let close_type = if force { "Force" } else { "Cooperative" };
+                self.status_message = Some(format!(
+                    "{} closing channel {} on {}",
+                    close_type, channel_point, actual_node
+                ));
+
+                let manager = self.network_manager.lock().await;
+                match manager
+                    .close_channel(&network_name, actual_node, channel_point, force)
+                    .await
+                {
+                    Ok(txid) => {
+                        self.status_message =
+                            Some(format!("Channel closing. Closing TXID: {}", &txid[..8]));
+                    }
+                    Err(e) => {
+                        self.status_message = Some(format!("Failed to close channel: {}", e));
                     }
                 }
                 drop(manager);

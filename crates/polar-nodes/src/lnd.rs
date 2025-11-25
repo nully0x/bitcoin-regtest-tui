@@ -445,4 +445,71 @@ impl LndNode {
 
         Ok(json)
     }
+
+    /// Close a Lightning channel.
+    ///
+    /// # Arguments
+    /// * `manager` - Docker container manager
+    /// * `channel_point` - Channel point in format "funding_txid:output_index"
+    /// * `force` - Whether to force close the channel (default: false for cooperative close)
+    pub async fn close_channel(
+        &self,
+        manager: &ContainerManager,
+        channel_point: &str,
+        force: bool,
+    ) -> Result<String> {
+        let container_id = self
+            .node
+            .container_id
+            .as_ref()
+            .ok_or_else(|| polar_core::Error::Config("LND node not running".to_string()))?;
+
+        // Parse channel_point into funding_txid and output_index
+        let parts: Vec<&str> = channel_point.split(':').collect();
+        if parts.len() != 2 {
+            return Err(polar_core::Error::Config(format!(
+                "Invalid channel_point format. Expected 'txid:index', got: {}",
+                channel_point
+            )));
+        }
+
+        let funding_txid = parts[0];
+        let output_index = parts[1];
+
+        let mut args = vec![
+            "lncli",
+            "--network=regtest",
+            "--tlscertpath=/home/lnd/.lnd/tls.cert",
+            "--macaroonpath=/home/lnd/.lnd/data/chain/bitcoin/regtest/admin.macaroon",
+            "closechannel",
+        ];
+
+        if force {
+            args.push("--force");
+        }
+
+        args.push(funding_txid);
+        args.push(output_index);
+
+        let output = manager.exec_command(container_id, args).await?;
+
+        let json: serde_json::Value = serde_json::from_str(&output).map_err(|e| {
+            polar_core::Error::Config(format!(
+                "Failed to parse close channel response: {}. Output was: {}",
+                e, output
+            ))
+        })?;
+
+        let closing_txid = json["closing_txid"]
+            .as_str()
+            .ok_or_else(|| {
+                polar_core::Error::Config(format!(
+                    "No closing_txid in response. Full response: {}",
+                    output
+                ))
+            })?
+            .to_string();
+
+        Ok(closing_txid)
+    }
 }

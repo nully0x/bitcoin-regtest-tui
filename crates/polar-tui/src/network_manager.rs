@@ -582,6 +582,14 @@ impl NetworkManager {
             .exec_command(container_id, channel_cmd)
             .await?;
 
+        // Execute lncli listchannels
+        let mut list_channels_cmd = lncli_args.clone();
+        list_channels_cmd.push("listchannels");
+        let list_channels = self
+            .container_manager
+            .exec_command(container_id, list_channels_cmd)
+            .await?;
+
         // Parse JSON responses
         let info_json: serde_json::Value = serde_json::from_str(&getinfo)
             .map_err(|e| Error::Config(format!("Failed to parse getinfo: {}", e)))?;
@@ -591,6 +599,41 @@ impl NetworkManager {
 
         let channel_json: serde_json::Value = serde_json::from_str(&channel_balance)
             .map_err(|e| Error::Config(format!("Failed to parse channel balance: {}", e)))?;
+
+        let channels_json: serde_json::Value = serde_json::from_str(&list_channels)
+            .map_err(|e| Error::Config(format!("Failed to parse channels list: {}", e)))?;
+
+        // Parse channel list
+        let channels = channels_json["channels"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|ch| polar_core::ChannelInfo {
+                        channel_point: ch["channel_point"]
+                            .as_str()
+                            .unwrap_or("unknown")
+                            .to_string(),
+                        remote_pubkey: ch["remote_pubkey"]
+                            .as_str()
+                            .unwrap_or("unknown")
+                            .to_string(),
+                        capacity: ch["capacity"]
+                            .as_str()
+                            .and_then(|s| s.parse::<i64>().ok())
+                            .unwrap_or(0),
+                        local_balance: ch["local_balance"]
+                            .as_str()
+                            .and_then(|s| s.parse::<i64>().ok())
+                            .unwrap_or(0),
+                        remote_balance: ch["remote_balance"]
+                            .as_str()
+                            .and_then(|s| s.parse::<i64>().ok())
+                            .unwrap_or(0),
+                        active: ch["active"].as_bool().unwrap_or(false),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         // Get container info for ports
         let container_info = self
@@ -663,6 +706,7 @@ impl NetworkManager {
                 .unwrap_or(0),
             rest_host,
             grpc_host,
+            channels,
         })
     }
 
@@ -1001,6 +1045,47 @@ impl NetworkManager {
             .await?;
 
         Ok(funding_txid)
+    }
+
+    /// Close a Lightning channel.
+    ///
+    /// # Arguments
+    /// * `network_name` - Name of the network
+    /// * `node_name` - Name of the node that owns the channel
+    /// * `channel_point` - Channel point in format "funding_txid:output_index"
+    /// * `force` - Whether to force close the channel
+    pub async fn close_channel(
+        &self,
+        network_name: &str,
+        node_name: &str,
+        channel_point: &str,
+        force: bool,
+    ) -> Result<String> {
+        let network = self
+            .get_network(network_name)
+            .ok_or_else(|| Error::NetworkNotFound(network_name.to_string()))?;
+
+        let node = network
+            .nodes
+            .iter()
+            .find(|n| n.name == node_name && n.kind == NodeKind::Lnd)
+            .ok_or_else(|| Error::Config(format!("LND node '{}' not found", node_name)))?;
+
+        let lnd = LndNode {
+            node: node.clone(),
+            image: network
+                .lnd_version
+                .clone()
+                .unwrap_or_else(|| LndNode::DEFAULT_IMAGE.to_string()),
+            bitcoin_node: String::new(),
+            alias: node.name.clone(),
+        };
+
+        let closing_txid = lnd
+            .close_channel(&self.container_manager, channel_point, force)
+            .await?;
+
+        Ok(closing_txid)
     }
 
     /// Send a Lightning payment from one node to another.

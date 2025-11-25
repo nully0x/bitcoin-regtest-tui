@@ -11,4 +11,4 @@ mod node_info;
 pub use config::Config;
 pub use error::{Error, Result};
 pub use network::{LightningImpl, Network, NetworkStatus, Node, NodeKind, NodePorts, PortConfig};
-pub use node_info::{BitcoinNodeInfo, LndNodeInfo, NodeInfo};
+pub use node_info::{BitcoinNodeInfo, ChannelInfo, LndNodeInfo, NodeInfo};

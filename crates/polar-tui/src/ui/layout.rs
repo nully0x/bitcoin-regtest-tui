@@ -20,6 +20,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         UiMode::MineBlocks => render_mine_blocks(frame, app),
         UiMode::FundWallet => render_fund_wallet(frame, app),
         UiMode::OpenChannel => render_open_channel(frame, app),
+        UiMode::CloseChannel => render_close_channel(frame, app),
         UiMode::SendPayment => render_send_payment(frame, app),
     }
 }
@@ -310,7 +311,9 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled("f", Style::default().fg(Color::Yellow)),
         Span::raw(": Fund | "),
         Span::styled("c", Style::default().fg(Color::Yellow)),
-        Span::raw(": Channel | "),
+        Span::raw(": Open | "),
+        Span::styled("l", Style::default().fg(Color::Red)),
+        Span::raw(": Close | "),
         Span::styled("p", Style::default().fg(Color::Yellow)),
         Span::raw(": Payment | "),
         Span::styled("g", Style::default().fg(Color::Cyan)),
@@ -505,7 +508,7 @@ fn render_bitcoin_info(info: &BitcoinNodeInfo) -> Vec<Line<'static>> {
 
 /// Render LND node information.
 fn render_lnd_info(info: &LndNodeInfo) -> Vec<Line<'static>> {
-    vec![
+    let mut lines = vec![
         Line::from(vec![Span::styled(
             "LND Node",
             Style::default()
@@ -621,7 +624,76 @@ fn render_lnd_info(info: &LndNodeInfo) -> Vec<Line<'static>> {
             Span::styled("gRPC:           ", Style::default().fg(Color::Cyan)),
             Span::raw(info.grpc_host.clone()),
         ]),
-    ]
+    ];
+
+    // Add channels section if there are any channels
+    if !info.channels.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![Span::styled(
+            "Channels",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )]));
+        lines.push(Line::from(""));
+
+        for (idx, channel) in info.channels.iter().enumerate() {
+            let status_color = if channel.active {
+                Color::Green
+            } else {
+                Color::Red
+            };
+            let status = if channel.active { "Active" } else { "Inactive" };
+
+            lines.push(Line::from(vec![Span::styled(
+                format!("Channel {} ({})", idx + 1, status),
+                Style::default()
+                    .fg(status_color)
+                    .add_modifier(Modifier::BOLD),
+            )]));
+
+            // Show abbreviated channel point
+            let chan_point = &channel.channel_point;
+            let chan_point_display = if chan_point.len() > 40 {
+                format!(
+                    "{}...:{}",
+                    &chan_point[..37],
+                    chan_point.split(':').last().unwrap_or("")
+                )
+            } else {
+                chan_point.clone()
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled("  Point:        ", Style::default().fg(Color::Cyan)),
+                Span::raw(chan_point_display),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("  Capacity:     ", Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("{} sats", channel.capacity),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("  Local:        ", Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("{} sats", channel.local_balance),
+                    Style::default().fg(Color::Green),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("  Remote:       ", Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("{} sats", channel.remote_balance),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+            lines.push(Line::from(""));
+        }
+    }
+
+    lines
 }
 
 /// Helper function to create a form field line.
@@ -786,6 +858,85 @@ fn render_open_channel(frame: &mut Frame, app: &App) {
         Line::from(""),
         Line::from(Span::styled(
             "Tab/↑↓: Navigate | ← →: Select nodes | Enter: Open | Esc: Cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(text).block(block).wrap(Wrap { trim: true });
+
+    frame.render_widget(paragraph, area);
+}
+
+/// Render the close channel dialog.
+fn render_close_channel(frame: &mut Frame, app: &App) {
+    let area = centered_rect(70, 40, frame.area());
+
+    let block = Block::default()
+        .title(" Close Lightning Channel ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red));
+
+    let node_name = app
+        .nodes
+        .get(app.close_channel_node_idx)
+        .map(|s| s.as_str())
+        .unwrap_or("None");
+
+    let force_text = if app.close_channel_force {
+        "Force Close (on-chain)"
+    } else {
+        "Cooperative Close"
+    };
+
+    let text = vec![
+        Line::from(""),
+        create_form_field("Node:", node_name, app.close_channel_form_field == 0, false),
+        Line::from(Span::styled(
+            "  (Use ← → to change)",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        create_form_field(
+            "Channel Point:",
+            &app.close_channel_point,
+            app.close_channel_form_field == 1,
+            true,
+        ),
+        Line::from(Span::styled(
+            "  (Format: txid:index)",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "Close Type:     ",
+                if app.close_channel_form_field == 2 {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Cyan)
+                },
+            ),
+            Span::styled("< ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                force_text,
+                if app.close_channel_force {
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Green)
+                },
+            ),
+            Span::styled(" >", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(Span::styled(
+            "  (Use ← → to toggle)",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Tab/↑↓: Navigate | ← →: Change values | Enter: Close | Esc: Cancel",
             Style::default().fg(Color::DarkGray),
         )),
     ];

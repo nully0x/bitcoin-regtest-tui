@@ -25,6 +25,23 @@ pub struct BitcoinNodeInfo {
     pub p2p_host: String,
 }
 
+/// Information about a Lightning channel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelInfo {
+    /// Channel point (funding_txid:output_index).
+    pub channel_point: String,
+    /// Remote node public key.
+    pub remote_pubkey: String,
+    /// Channel capacity in satoshis.
+    pub capacity: i64,
+    /// Local balance in satoshis.
+    pub local_balance: i64,
+    /// Remote balance in satoshis.
+    pub remote_balance: i64,
+    /// Whether the channel is active.
+    pub active: bool,
+}
+
 /// Information about an LND node.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LndNodeInfo {
@@ -56,6 +73,8 @@ pub struct LndNodeInfo {
     pub rest_host: String,
     /// gRPC host:port.
     pub grpc_host: String,
+    /// List of active channels.
+    pub channels: Vec<ChannelInfo>,
 }
 
 /// Unified node information.
